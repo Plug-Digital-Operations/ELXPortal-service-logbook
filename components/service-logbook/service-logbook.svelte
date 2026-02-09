@@ -37,14 +37,23 @@
   let agentOrAssetName: string | null = null;
   let categories: Map<number, ServiceLogbookCategory> = new Map();
   let myUser: ResourceData.MyUser | null = null;
-  let loaded: Writable<boolean>;
+  let loaded: Writable<boolean> = writable(false);
   let mapAppConfigToServiceLogbookCategoryMap: (
     appConfig: ResourceData.AppConfig<{
       categories?: ServiceLogbookCategory[];
-    }> | null
+    }> | null,
   ) => Map<number, ServiceLogbookCategory>;
-  let notes: Writable<Note[]>;
-  let notesWithHtml: Readable<NoteWithHtml[]>;
+  let notes: Writable<Note[]> = writable([]);
+  let notesWithHtml: Readable<NoteWithHtml[]> = derived(
+    notes,
+    ($notes: Note[]) =>
+      $notes.map((note) => {
+        const html = note.text.match(/^<\/?[a-z][\s\S]*>/)
+          ? note.text
+          : renderMarkdownToHtml(note.text);
+        return { ...note, html };
+      }),
+  );
   let notesService: NotesService;
   let searchInput: HTMLInputElement | null = null;
   let searchInputVisible: boolean = false;
@@ -65,8 +74,68 @@
     selectedCategoryId: null,
   });
 
-  let filteredNotesWithHtml: Readable<NoteWithHtml[]>;
+  let filteredNotesWithHtml: Readable<NoteWithHtml[]> = derived(
+    [filter, notesWithHtml, isPlugPowerUser],
+    ([$filter, $notesWithHtml, $isPlugPowerUser]) => {
+      const { searchQuery, selectedCategoryId } = $filter;
 
+      // First filter by external_note visibility for non-Plug Power users
+      let result = $notesWithHtml;
+      if (!$isPlugPowerUser) {
+        result = result.filter((note) => note.external_note === true);
+      }
+
+      // Then filter by category if selected
+      result =
+        selectedCategoryId !== null
+          ? result.filter((note) => note.category === selectedCategoryId)
+          : result;
+
+      if (!searchQuery) {
+        return result;
+      }
+
+      const query = searchQuery.toLowerCase();
+      return result.filter((note) => {
+        // Search in basic fields
+        if (getNoteUserName(usersDict, note).toLowerCase().includes(query)) {
+          return true;
+        }
+        if (note.subject?.toLowerCase().includes(query)) {
+          return true;
+        }
+        if (HtmlToReadableText(note.html).toLowerCase().includes(query)) {
+          return true;
+        }
+
+        // Search in category
+        if (note.note_category?.toLowerCase().includes(query)) {
+          return true;
+        }
+
+        // Search in tag number
+        if (
+          note.tag_numbers?.some((tag) => tag.toLowerCase().includes(query))
+        ) {
+          return true;
+        }
+        // Search in version
+        if (note.version?.toLowerCase().includes(query)) {
+          return true;
+        }
+
+        // Search in stack replacements (parse the string format)
+        if (note.stack_replacements) {
+          const stackSearchText = note.stack_replacements.toLowerCase();
+          if (stackSearchText.includes(query)) {
+            return true;
+          }
+        }
+
+        return false;
+      });
+    },
+  );
   $: isNarrow = width !== null ? width <= 460 : false;
   $: isSmall = width !== null ? width <= 400 : false;
   $: notesWithCategories = derived([notesWithHtml], ([$notes]) => {
@@ -113,7 +182,7 @@
     const relevantNotes = allNotes.filter(
       (n) =>
         n.note_category === "Stack installs" ||
-        n.note_category === "Stack replacements"
+        n.note_category === "Stack replacements",
     );
 
     if (relevantNotes.length === 0) {
@@ -165,7 +234,7 @@
           .filter((r) => r.trim());
         for (const replacement of replacements) {
           const match = replacement.match(
-            /\('([^']+)','([^']*)','([^']*)','([^']*)','([^']+)'\)/
+            /\('([^']+)','([^']*)','([^']*)','([^']*)','([^']+)'\)/,
           );
           if (match) {
             const [, identifier, , addedSerial] = match;
@@ -183,7 +252,7 @@
     return serialNumbers;
   }
   async function fetchDataVariables(
-    agentId: string
+    agentId: string,
   ): Promise<{ value: string; label: string; shortLabel: string }[]> {
     if (!agentId) return [];
 
@@ -297,191 +366,23 @@
         "__TEXT__.CONFIRM_IMPORT",
       ],
       undefined,
-      { source: "global" }
+      { source: "global" },
     );
 
     const backendComponentClient = context.createBackendComponentClient();
     mapAppConfigToServiceLogbookCategoryMap =
       mapAppConfigToServiceLogbookCategoryMapFactory(context);
     notesService = new NotesService(backendComponentClient);
-    loaded = notesService.loaded;
-    notes = notesService.notes;
+
+    // Subscribe to the service stores and sync to local stores
+    const unsubscribeLoaded = notesService.loaded.subscribe((value) =>
+      loaded.set(value),
+    );
+    const unsubscribeNotes = notesService.notes.subscribe((value) =>
+      notes.set(value),
+    );
+
     notesService.load();
-
-    notesWithHtml = derived(notes, ($notes: Note[]) =>
-      $notes.map((note) => {
-        const html = note.text.match(/^<\/?[a-z][\s\S]*>/)
-          ? note.text
-          : renderMarkdownToHtml(note.text);
-        return { ...note, html };
-      })
-    );
-
-    filteredNotesWithHtml = derived(
-      [filter, notesWithHtml, isPlugPowerUser],
-      ([$filter, $notesWithHtml, $isPlugPowerUser]) => {
-        const { searchQuery, selectedCategoryId } = $filter;
-
-        // First filter by external_note visibility for non-Plug Power users
-        let notes = $notesWithHtml;
-        if (!$isPlugPowerUser) {
-          notes = notes.filter((note) => note.external_note === true);
-        }
-
-        // Then filter by category if selected
-        notes =
-          selectedCategoryId !== null
-            ? notes.filter((note) => note.category === selectedCategoryId)
-            : notes;
-
-        if (!searchQuery) {
-          return notes;
-        }
-
-        const query = searchQuery.toLowerCase();
-        return notes.filter((note) => {
-          // Search in basic fields
-          if (getNoteUserName(usersDict, note).toLowerCase().includes(query)) {
-            return true;
-          }
-          if (note.subject?.toLowerCase().includes(query)) {
-            return true;
-          }
-          if (HtmlToReadableText(note.html).toLowerCase().includes(query)) {
-            return true;
-          }
-
-          // Search in category
-          if (note.note_category?.toLowerCase().includes(query)) {
-            return true;
-          }
-
-          // Search in tag number
-          if (
-            note.tag_numbers?.some((tag) => tag.toLowerCase().includes(query))
-          ) {
-            return true;
-          }
-          // Search in version
-          if (note.version?.toLowerCase().includes(query)) {
-            return true;
-          }
-
-          // Search in stack replacements (parse the string format)
-          if (note.stack_replacements) {
-            const stackSearchText = note.stack_replacements.toLowerCase();
-            if (stackSearchText.includes(query)) {
-              return true;
-            }
-
-            const replacements = note.stack_replacements
-              .split(";")
-              .filter((r) => r.trim());
-
-            for (const replacement of replacements) {
-              const match = replacement.match(
-                /\('([^']+)','([^']*)','([^']*)','([^']+)'\)/
-              );
-              if (match) {
-                const [, identifier, removed, added, failed] = match;
-                if (
-                  identifier.toLowerCase().includes(query) ||
-                  removed.toLowerCase().includes(query) ||
-                  added.toLowerCase().includes(query) ||
-                  (failed === "true" && "failed".includes(query))
-                ) {
-                  return true;
-                }
-              }
-            }
-          }
-          if (note.stack_tensioning) {
-            const tensioningSearchText = note.stack_tensioning.toLowerCase();
-            if (tensioningSearchText.includes(query)) {
-              return true;
-            }
-
-            const tensionings = note.stack_tensioning
-              .split(";")
-              .filter((r) => r.trim());
-
-            for (const tensioning of tensionings) {
-              const match = tensioning.match(
-                /\('([^']+)','([^']*)','([^']*)','([^']+)'\)/
-              );
-              if (match) {
-                const [, identifier, serialNumber, insight, completed] = match;
-                if (
-                  identifier.toLowerCase().includes(query) ||
-                  serialNumber.toLowerCase().includes(query) ||
-                  insight.toLowerCase().includes(query) ||
-                  (completed === "true" && "completed".includes(query))
-                ) {
-                  return true;
-                }
-              }
-            }
-          }
-          // Search in stack inspections (parse the string format)
-          if (note.stack_inspections) {
-            const inspectionSearchText = note.stack_inspections.toLowerCase();
-            if (inspectionSearchText.includes(query)) {
-              return true;
-            }
-
-            const inspections = note.stack_inspections
-              .split(";")
-              .filter((r) => r.trim());
-
-            for (const inspection of inspections) {
-              const match = inspection.match(
-                /\('([^']+)','([^']*)','([^']*)'\)/
-              );
-              if (match) {
-                const [, identifier, serialNumber, insight] = match;
-                if (
-                  identifier.toLowerCase().includes(query) ||
-                  serialNumber.toLowerCase().includes(query) ||
-                  insight.toLowerCase().includes(query)
-                ) {
-                  return true;
-                }
-              }
-            }
-          }
-          // Search in stack installs (parse the string format)
-          if (note.stack_installs) {
-            const installsSearchText = note.stack_installs.toLowerCase();
-            if (installsSearchText.includes(query)) {
-              return true;
-            }
-
-            const installs = note.stack_installs
-              .split(";")
-              .filter((r) => r.trim());
-
-            for (const install of installs) {
-              const match = install.match(/\('([^']+)','([^']*)'\)/);
-              if (match) {
-                const [, identifier, serialNumber] = match;
-                if (
-                  identifier.toLowerCase().includes(query) ||
-                  serialNumber.toLowerCase().includes(query)
-                ) {
-                  return true;
-                }
-              }
-            }
-          }
-          // Search in external note flag
-          if (note.external_note && "external".includes(query)) {
-            return true;
-          }
-
-          return false;
-        });
-      }
-    );
 
     const resourceDataClient = context.createResourceDataClient();
     resourceDataClient.query(
@@ -489,7 +390,7 @@
       ([result]) => {
         const appConfig = result.data;
         categories = mapAppConfigToServiceLogbookCategoryMap(appConfig);
-      }
+      },
     );
     resourceDataClient.query(
       [
@@ -504,10 +405,10 @@
         // Fetch data variables if we have an agent
         if (agentResult.data?.publicId) {
           dataVariableOptions = await fetchDataVariables(
-            agentResult.data.publicId
+            agentResult.data.publicId,
           );
         }
-      }
+      },
     );
     resourceDataClient.query(
       [
@@ -519,7 +420,7 @@
         if (userListResult.data) {
           usersDict = userListResult.data.reduce(
             (dict, user) => ({ ...dict, [user.publicId]: user }),
-            {}
+            {},
           );
         }
 
@@ -528,10 +429,10 @@
         userEmail = await fetchCurrentUserEmail();
         if (userEmail) {
           isPlugPowerUser.set(
-            userEmail.toLowerCase().includes("@plugpower.com")
+            userEmail.toLowerCase().includes("@plugpower.com"),
           );
         }
-      }
+      },
     );
 
     createTooltip(addButton, { message: translations.ADD_NOTE });
@@ -552,13 +453,15 @@
     return () => {
       resizeObserver.unobserve(rootEl);
       unsubscribe();
+      unsubscribeLoaded();
+      unsubscribeNotes();
     };
   });
 
   function getNoteIsActionable(
     _agentOrAsset: ResourceData.Agent | ResourceData.Asset | null,
     _myUser: ResourceData.MyUser | null,
-    note: Note
+    note: Note,
   ): boolean {
     // Anyone can edit any note - restriction removed
     return true;
@@ -566,7 +469,7 @@
 
   function getNoteUserName(
     _usersDict: Record<string, ResourceData.User> | null,
-    note: Note
+    note: Note,
   ): string {
     // Try to look up user name from the users dictionary
     if (_usersDict) {
@@ -590,7 +493,7 @@
 
   function getNoteEditedBy(
     _usersDict: Record<string, ResourceData.User> | null,
-    note: Note
+    note: Note,
   ): string {
     if (_usersDict && note.editor_id && note.editor_name) {
       /**
@@ -627,7 +530,7 @@
     const categoryOptions = get(isPlugPowerUser)
       ? allCategoryOptions
       : allCategoryOptions.filter(
-          (cat) => !hiddenCategoriesForExternal.includes(cat.value)
+          (cat) => !hiddenCategoriesForExternal.includes(cat.value),
         );
 
     let step = "category";
@@ -706,7 +609,7 @@
                 : "false";
               if (removed_serial_number || added_serial_number) {
                 stackReplacements.push(
-                  `('${identifier}','${removed_serial_number}','${added_serial_number}','${stack_symptom}','${stack_symptom_confirmed}')`
+                  `('${identifier}','${removed_serial_number}','${added_serial_number}','${stack_symptom}','${stack_symptom_confirmed}')`,
                 );
               }
             }
@@ -731,7 +634,7 @@
 
               if (stack_serial_number || insight) {
                 stackInspections.push(
-                  `('${identifier}','${stack_serial_number}','${insight}','${stack_completed}')`
+                  `('${identifier}','${stack_serial_number}','${insight}','${stack_completed}')`,
                 );
               }
             }
@@ -756,7 +659,7 @@
 
               if (stack_serial_number || insight) {
                 stackTensioning.push(
-                  `('${identifier}','${stack_serial_number}','${insight}','${stack_completed}')`
+                  `('${identifier}','${stack_serial_number}','${insight}','${stack_completed}')`,
                 );
               }
             }
@@ -777,7 +680,7 @@
 
               if (stack_serial_number) {
                 stackInstalls.push(
-                  `('${identifier}','${stack_serial_number}')`
+                  `('${identifier}','${stack_serial_number}')`,
                 );
               }
             }
@@ -789,7 +692,7 @@
           // Transform tag_numbers from array of objects to array of strings
           if (value.tag_numbers && Array.isArray(value.tag_numbers)) {
             value.tag_numbers = value.tag_numbers.map((item: any) =>
-              typeof item === "string" ? item : item.tag_number
+              typeof item === "string" ? item : item.tag_number,
             );
           }
 
@@ -815,7 +718,7 @@
 
   async function handleDownloadCsvButtonClick(notes: Note[]): Promise<void> {
     const categories = Array.from(
-      new Set(notes.map((n) => n.note_category).filter(Boolean))
+      new Set(notes.map((n) => n.note_category).filter(Boolean)),
     );
     const categoryOptions = categories.map((c) => ({ label: c, value: c }));
 
@@ -839,12 +742,12 @@
 
       if (category && category !== "all") {
         filteredNotes = filteredNotes.filter(
-          (note) => note.note_category === category
+          (note) => note.note_category === category,
         );
       }
 
       const hasEditedBy = filteredNotes.some(
-        (note) => note.editor_id && note.editor_name
+        (note) => note.editor_id && note.editor_name,
       );
       const hasSubject = filteredNotes.some((note) => note.subject);
       const csvHeaders = [
@@ -881,7 +784,7 @@
   }
 
   async function handlePreviewNoteClick(
-    initialNote: NoteWithHtml
+    initialNote: NoteWithHtml,
   ): Promise<void> {
     let root: ShadowRoot;
     let note: NoteWithHtml | null | undefined = initialNote;
@@ -1042,7 +945,7 @@
   async function handleMoreActionsButtonClick(
     event: Event,
     note: Note,
-    closeDialog?: () => void
+    closeDialog?: () => void,
   ): Promise<void> {
     event.stopImmediatePropagation();
     const actions = [
@@ -1106,7 +1009,7 @@
       initialValue.tag_numbers = initialValue.tag_numbers.map(
         (tag: string) => ({
           tag_number: tag,
-        })
+        }),
       );
     }
     if (
@@ -1118,7 +1021,7 @@
         .filter((r) => r.trim())
         .map((r) => {
           const match = r.match(
-            /\('([^']+)','([^']*)','([^']*)','([^']*)','([^']+)'\)/
+            /\('([^']+)','([^']*)','([^']*)','([^']*)','([^']+)'\)/,
           );
           if (match) {
             return {
@@ -1155,7 +1058,7 @@
         .map((r) => {
           // Try new format first (with completed flag)
           const matchNew = r.match(
-            /\('([^']+)','([^']*)','([^']*)','([^']+)'\)/
+            /\('([^']+)','([^']*)','([^']*)','([^']+)'\)/,
           );
           if (matchNew) {
             return {
@@ -1276,7 +1179,7 @@
       // Transform tag_numbers from array of objects to array of strings
       if (updatedNote.tag_numbers && Array.isArray(updatedNote.tag_numbers)) {
         updatedNote.tag_numbers = updatedNote.tag_numbers.map((item: any) =>
-          typeof item === "string" ? item : item.tag_number
+          typeof item === "string" ? item : item.tag_number,
         );
       }
       if (note.note_category === "Stack replacements") {
@@ -1300,7 +1203,7 @@
 
           if (removed_serial_number || added_serial_number) {
             stackReplacements.push(
-              `('${identifier}','${removed_serial_number}','${added_serial_number}','${stack_symptom}','${stack_symptom_confirmed}')`
+              `('${identifier}','${removed_serial_number}','${added_serial_number}','${stack_symptom}','${stack_symptom_confirmed}')`,
             );
           }
         }
@@ -1333,7 +1236,7 @@
 
           if (stack_serial_number || insight) {
             stackInspections.push(
-              `('${identifier}','${stack_serial_number}','${insight}','${stack_completed}')`
+              `('${identifier}','${stack_serial_number}','${insight}','${stack_completed}')`,
             );
           }
         }
@@ -1366,7 +1269,7 @@
 
           if (stack_serial_number || insight) {
             stackTensioning.push(
-              `('${identifier}','${stack_serial_number}','${insight}','${stack_completed}')`
+              `('${identifier}','${stack_serial_number}','${insight}','${stack_completed}')`,
             );
           }
         }
@@ -1434,7 +1337,7 @@
     const categoryOptions = get(isPlugPowerUser)
       ? allCategoryOptions
       : allCategoryOptions.filter(
-          (cat) => !hiddenCategoriesForExternal.includes(cat.value)
+          (cat) => !hiddenCategoriesForExternal.includes(cat.value),
         );
 
     let step = "select_category";
@@ -1557,7 +1460,7 @@
                 .filter((r) => r.trim())
                 .map((r) => {
                   const match = r.match(
-                    /\('([^']+)','([^']*)','([^']*)','([^']*)','([^']+)'\)/
+                    /\('([^']+)','([^']*)','([^']*)','([^']*)','([^']+)'\)/,
                   );
                   if (match) {
                     return {
@@ -1617,7 +1520,7 @@
                 .map((r) => {
                   // Try new format first
                   const matchNew = r.match(
-                    /\('([^']+)','([^']*)','([^']*)','([^']+)'\)/
+                    /\('([^']+)','([^']*)','([^']*)','([^']+)'\)/,
                   );
                   if (matchNew) {
                     return {
@@ -1687,7 +1590,7 @@
                 .filter((r) => r.trim())
                 .map((r) => {
                   const match = r.match(
-                    /\('([^']+)','([^']*)','([^']*)','([^']+)'\)/
+                    /\('([^']+)','([^']*)','([^']*)','([^']+)'\)/,
                   );
                   if (match) {
                     return {
@@ -1873,7 +1776,7 @@
             case "Settings change":
               if (value.tag_numbers && Array.isArray(value.tag_numbers)) {
                 updatedNote.tag_numbers = value.tag_numbers.map((item: any) =>
-                  typeof item === "string" ? item : item.tag_number
+                  typeof item === "string" ? item : item.tag_number,
                 );
               }
               break;
@@ -1906,7 +1809,7 @@
 
                 if (removed_serial_number || added_serial_number) {
                   stackReplacements.push(
-                    `('${identifier}','${removed_serial_number}','${added_serial_number}','${stack_symptom}','${stack_symptom_confirmed}')`
+                    `('${identifier}','${removed_serial_number}','${added_serial_number}','${stack_symptom}','${stack_symptom_confirmed}')`,
                   );
                 }
               }
@@ -1929,7 +1832,7 @@
               const allStackIdentifiers2 = ["a", "b", "c", "d", "e"];
               const stackIdentifiers2 = allStackIdentifiers2.slice(
                 0,
-                stackCount2
+                stackCount2,
               );
 
               for (const identifier of stackIdentifiers2) {
@@ -1944,7 +1847,7 @@
 
                 if (stack_serial_number || insight) {
                   stackInspections.push(
-                    `('${identifier}','${stack_serial_number}','${insight}','${stack_completed}')`
+                    `('${identifier}','${stack_serial_number}','${insight}','${stack_completed}')`,
                   );
                 }
               }
@@ -1966,7 +1869,7 @@
               const allStackIdentifiers3 = ["a", "b", "c", "d", "e"];
               const stackIdentifiers3 = allStackIdentifiers3.slice(
                 0,
-                stackCount3
+                stackCount3,
               );
 
               for (const identifier of stackIdentifiers3) {
@@ -1981,7 +1884,7 @@
 
                 if (stack_serial_number || insight) {
                   stackTensioning.push(
-                    `('${identifier}','${stack_serial_number}','${insight}','${stack_completed}')`
+                    `('${identifier}','${stack_serial_number}','${insight}','${stack_completed}')`,
                   );
                 }
               }
@@ -2003,7 +1906,7 @@
               const allStackIdentifiers4 = ["a", "b", "c", "d", "e"];
               const stackIdentifiers4 = allStackIdentifiers4.slice(
                 0,
-                stackCount4
+                stackCount4,
               );
 
               for (const identifier of stackIdentifiers4) {
@@ -2013,7 +1916,7 @@
 
                 if (stack_serial_number) {
                   stackInstalls.push(
-                    `('${identifier}','${stack_serial_number}')`
+                    `('${identifier}','${stack_serial_number}')`,
                   );
                 }
               }
@@ -2074,7 +1977,7 @@
             month: "short",
             day: "numeric",
           },
-          date
+          date,
         )
       : _mapNoteToFormattedDateTime(
           note,
@@ -2083,7 +1986,7 @@
             month: "2-digit",
             day: "2-digit",
           },
-          date
+          date,
         );
   }
 
@@ -2099,14 +2002,14 @@
     date: DateTime = DateTime.fromMillis(note.created_on, {
       locale: context.appData.locale,
       zone: context.appData.timeZone,
-    })
+    }),
   ): string {
     return date.toLocaleString(formatOpts);
   }
 
   function createTooltip(
     button: HTMLButtonElement,
-    options: { message: string }
+    options: { message: string },
   ): void {
     context.createTooltip(button, {
       message: options.message,
@@ -2149,7 +2052,7 @@
     let performedOnHtml = "";
     if (note.performed_on) {
       const performedDate = DateTime.fromMillis(
-        note.performed_on
+        note.performed_on,
       ).toLocaleString({
         year: "numeric",
         month: "long",
@@ -2217,7 +2120,7 @@
             .filter((r) => r.trim())
             .map((r) => {
               const match = r.match(
-                /\('([^']+)','([^']*)','([^']*)','([^']*)','([^']+)'\)/
+                /\('([^']+)','([^']*)','([^']*)','([^']*)','([^']+)'\)/,
               );
               if (match) {
                 return {
@@ -2283,7 +2186,7 @@
             .map((r) => {
               // Try new format first (with completed flag)
               const matchNew = r.match(
-                /\('([^']+)','([^']*)','([^']*)','([^']+)'\)/
+                /\('([^']+)','([^']*)','([^']*)','([^']+)'\)/,
               );
               if (matchNew) {
                 return {
@@ -2342,7 +2245,7 @@
             .filter((r) => r.trim())
             .map((r) => {
               const match = r.match(
-                /\('([^']+)','([^']*)','([^']*)','([^']+)'\)/
+                /\('([^']+)','([^']*)','([^']*)','([^']+)'\)/,
               );
               if (match) {
                 return {
@@ -2469,11 +2372,11 @@
       ([key, category]) => ({
         text: category.name,
         key,
-      })
+      }),
     );
     const selected = $filter.selectedCategoryId
       ? selectOptions.findIndex(
-          (option) => option.key === $filter.selectedCategoryId
+          (option) => option.key === $filter.selectedCategoryId,
         )
       : undefined;
 
@@ -2509,7 +2412,7 @@
       // Extract just the content part (everything inside card-content)
       const fullHtml = getNoteHtmlContent(note);
       const contentMatch = fullHtml.match(
-        /<div class="card-content">([\s\S]*)<\/div>\s*<\/div>$/
+        /<div class="card-content">([\s\S]*)<\/div>\s*<\/div>$/,
       );
       if (contentMatch) {
         cardContent.innerHTML = contentMatch[1];
@@ -2521,7 +2424,7 @@
     const inputs: ComponentInput[] = [];
     inputs.push({
       key: "performed_on",
-      type: "Date",
+      type: "DateTime",
       label: "Performed on",
       required: true,
     });
@@ -2622,7 +2525,7 @@
         const allStackIdentifiersInstalls = ["a", "b", "c", "d", "e"];
         const stackIdentifiersInstalls = allStackIdentifiersInstalls.slice(
           0,
-          stackCountInstalls
+          stackCountInstalls,
         );
 
         for (const identifier of stackIdentifiersInstalls) {
@@ -2649,7 +2552,7 @@
         const allStackIdentifiersInspection = ["a", "b", "c", "d", "e"];
         const stackIdentifiersInspection = allStackIdentifiersInspection.slice(
           0,
-          stackCountInspection
+          stackCountInspection,
         );
 
         // Get prefilled serial numbers if not editing
@@ -2696,7 +2599,7 @@
         const allStackIdentifiersTensioning = ["a", "b", "c", "d", "e"];
         const stackIdentifiersTensioning = allStackIdentifiersTensioning.slice(
           0,
-          stackCountTensioning
+          stackCountTensioning,
         );
 
         // Get prefilled serial numbers if not editing
@@ -2776,7 +2679,7 @@
             label: "Software Version",
             required: false,
             placeholder: "Enter new software version (e.g., v2.1.0)",
-          }
+          },
         );
         break;
       default:
@@ -2845,7 +2748,7 @@
             const editedByUser = getNoteEditedBy(usersDict, note);
             const editedDate = note.updated_on
               ? DateTime.fromMillis(note.updated_on).toLocaleString(
-                  DateTime.DATETIME_SHORT
+                  DateTime.DATETIME_SHORT,
                 )
               : "";
             const dateText = editedDate ? ` on ${editedDate}` : "";
@@ -2888,7 +2791,7 @@
         type: "application/json",
       });
       const fileName = `${kebabCase(
-        deburr(agentOrAssetName ?? undefined)
+        deburr(agentOrAssetName ?? undefined),
       )}_service-logbook-notes.json`;
       if ("saveAsFile" in context) {
         context.saveAsFile(data, fileName);
