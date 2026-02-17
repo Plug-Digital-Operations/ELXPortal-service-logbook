@@ -30,6 +30,7 @@
 
   export let context: ComponentContext;
   const isPlugPowerUser: Writable<boolean> = writable(false);
+  const userIdentityResolved: Writable<boolean> = writable(false);
   let userEmail: string | null = null;
   let rootEl: HTMLDivElement;
   let addButton: HTMLButtonElement;
@@ -414,7 +415,7 @@
     resourceDataClient.query(
       [
         { selector: "MyUser", fields: ["publicId", "support"] },
-        { selector: "UserList", fields: ["name", "publicId", "emailAddress"] },
+        { selector: "UserList", fields: ["name", "publicId"] },
       ],
       async ([myUserResult, userListResult]) => {
         myUser = myUserResult.data;
@@ -424,20 +425,17 @@
             {},
           );
           plugPowerUserOptions = userListResult.data
-            .filter((u) =>
-              u.emailAddress?.toLowerCase().includes("@plugpower.com"),
-            )
             .map((u) => ({ value: u.name, label: u.name }));
         }
 
-        // Fetch user email to determine Plug Power status
-        // Fetch user email to determine Plug Power status
+        // emailAddress is not a supported field for the resource client selectors,
+        // so we fetch it directly via the API.
         userEmail = await fetchCurrentUserEmail();
-        if (userEmail) {
-          isPlugPowerUser.set(
-            userEmail.toLowerCase().includes("@plugpower.com"),
-          );
-        }
+        console.log("[ServiceLogbook] Current user email:", userEmail);
+        isPlugPowerUser.set(
+          userEmail?.toLowerCase().includes("@plugpower.com") ?? false,
+        );
+        userIdentityResolved.set(true);
       },
     );
 
@@ -450,15 +448,8 @@
       });
     });
     resizeObserver.observe(rootEl);
-    const unsubscribe = filteredNotesWithHtml.subscribe((notes) => {
-      if (notes && notes.length > 0) {
-        console.log("--- Currently Displayed Notes ---");
-        console.table(notes);
-      }
-    });
     return () => {
       resizeObserver.unobserve(rootEl);
-      unsubscribe();
       unsubscribeLoaded();
       unsubscribeNotes();
     };
@@ -3372,7 +3363,7 @@
     </div>
   {/if}
   <div class="card-content">
-    {#if !!$loaded}
+    {#if !!$loaded && $userIdentityResolved}
       {#if !!$filteredNotesWithHtml?.length}
         <div class="list-wrapper">
           <div class="base-list">
