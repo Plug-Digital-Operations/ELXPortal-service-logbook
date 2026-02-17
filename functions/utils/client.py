@@ -99,6 +99,7 @@ class NotesClient:
             stack_installs=add.stack_installs,
             stack_tensioning=add.stack_tensioning,
             workorder_id=add.workorder_id,
+            note_sub_category=add.note_sub_category,
             additional_users=add.additional_users,
             maintenance_interval_months=add.maintenance_interval_months,
         )
@@ -168,6 +169,7 @@ class NotesClient:
             "stack_installs",
             "stack_tensioning",
             "workorder_id",
+            "note_sub_category",
             "additional_users",
             "maintenance_interval_months",
         ]:

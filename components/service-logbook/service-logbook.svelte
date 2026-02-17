@@ -515,15 +515,17 @@
       { value: "Stack tensioning", label: "Stack tensioning" },
       { value: "Stack installs", label: "Stack installs" },
       { value: "Maintenance", label: "Maintenance" },
+      { value: "Performance test", label: "Performance test" },
       { value: "Other", label: "Other" },
     ];
 
-    // Hide Stack replacements, Stack inspection, Stack tensioning, and Stack installs for non-Plug Power users
+    // Hide Stack replacements, Stack inspection, Stack tensioning, Stack installs and Performance test for non-Plug Power users
     const hiddenCategoriesForExternal = [
       "Stack replacements",
       "Stack inspection",
       "Stack tensioning",
       "Stack installs",
+      "Performance test",
     ];
     const categoryOptions = get(isPlugPowerUser)
       ? allCategoryOptions
@@ -1446,15 +1448,17 @@
       { value: "Stack tensioning", label: "Stack tensioning" },
       { value: "Stack installs", label: "Stack installs" },
       { value: "Maintenance", label: "Maintenance" },
+      { value: "Performance test", label: "Performance test" },
       { value: "Other", label: "Other" },
     ];
 
-    // Hide Stack replacements, Stack inspection, Stack tensioning, and Stack installs for non-Plug Power users
+    // Hide Stack replacements, Stack inspection, Stack tensioning, Stack installs and Performance test for non-Plug Power users
     const hiddenCategoriesForExternal = [
       "Stack replacements",
       "Stack inspection",
       "Stack tensioning",
       "Stack installs",
+      "Performance test",
     ];
     const categoryOptions = get(isPlugPowerUser)
       ? allCategoryOptions
@@ -2532,6 +2536,16 @@
     </div>
   `;
         break;
+      case "Performance test":
+        categoryFields = `
+    <div style="margin-bottom: 16px; padding: 8px; border-left: 3px solid color-mix(in srgb, transparent, currentcolor 20%);">
+      <div style="margin-bottom: 8px;">
+        <strong style="color: color-mix(in srgb, transparent, currentcolor 40%);">Test Type:</strong>
+        <span>${note.note_sub_category || "-"}</span>
+      </div>
+    </div>
+  `;
+        break;
     }
 
     // External note badge
@@ -2954,6 +2968,19 @@
               label: "15 Years",
               defaultValue: false,
             },
+          ],
+        });
+        break;
+      case "Performance test":
+        inputs.push({
+          key: "note_sub_category",
+          type: "Selection" as const,
+          label: "Test Type",
+          required: true,
+          options: [
+            { label: "Full load test", value: "Full load test" },
+            { label: "Ramp test", value: "Ramp test" },
+            { label: "Other (Specify in text)", value: "Other (Specify in text)" },
           ],
         });
         break;

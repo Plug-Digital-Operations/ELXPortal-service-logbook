@@ -51,6 +51,9 @@ export interface Note {
   stack_inspections?: string | null;
   stack_installs?: string | null;
 
+  // Performance test
+  note_sub_category?: string | null;
+
   // Stack Tensioning
   stack_tensioning?: string | null;
 

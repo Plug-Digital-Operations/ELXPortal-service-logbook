@@ -50,6 +50,9 @@ class Note(BaseModel):
 
     stack_tensioning: str | None = Field(default=None)
 
+    # Performance test
+    note_sub_category: str | None = Field(default=None)
+
     # Maintenance
     additional_users: list[str] | None = Field(default=None)
     maintenance_interval_months: list[int] | None = Field(default=None)
@@ -111,6 +114,9 @@ class NoteEdit(BaseModel):
     stack_installs: str | None = Field(default=None)
     stack_tensioning: str | None = Field(default=None)
 
+    # Performance test
+    note_sub_category: str | None = Field(default=None)
+
     # Maintenance
     additional_users: list[str] | None = Field(default=None)
     maintenance_interval_months: list[int] | None = Field(default=None)
@@ -141,6 +147,9 @@ class NoteAdd(BaseModel):
     stack_inspections: str | None = Field(default=None)
     stack_installs: str | None = Field(default=None)
     stack_tensioning: str | None = Field(default=None)
+
+    # Performance test
+    note_sub_category: str | None = Field(default=None)
 
     # Maintenance
     additional_users: list[str] | None = Field(default=None)
