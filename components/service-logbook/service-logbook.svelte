@@ -317,6 +317,7 @@
     try {
       const url = context.getApiUrl("MyUser", { fields: "emailAddress" });
       const response = await fetch(url, {
+        signal: AbortSignal.timeout(5000),
         headers: {
           Authorization: "Bearer " + context.appData.accessToken.secretId,
           "Api-Application": context.appData.apiAppId,
@@ -417,7 +418,7 @@
         { selector: "MyUser", fields: ["publicId", "support"] },
         { selector: "UserList", fields: ["name", "publicId"] },
       ],
-      async ([myUserResult, userListResult]) => {
+      ([myUserResult, userListResult]) => {
         myUser = myUserResult.data;
         if (userListResult.data) {
           usersDict = userListResult.data.reduce(
@@ -427,17 +428,24 @@
           plugPowerUserOptions = userListResult.data
             .map((u) => ({ value: u.name, label: u.name }));
         }
+      },
+    );
 
-        // emailAddress is not a supported field for the resource client selectors,
-        // so we fetch it directly via the API.
-        userEmail = await fetchCurrentUserEmail();
+    // Resolve user identity immediately and independently of resource client queries.
+    // This prevents a stuck loading state when UserList is slow or restricted.
+    fetchCurrentUserEmail()
+      .then((email) => {
+        userEmail = email;
         console.log("[ServiceLogbook] Current user email:", userEmail);
         isPlugPowerUser.set(
           userEmail?.toLowerCase().includes("@plugpower.com") ?? false,
         );
         userIdentityResolved.set(true);
-      },
-    );
+      })
+      .catch(() => {
+        isPlugPowerUser.set(false);
+        userIdentityResolved.set(true);
+      });
 
     createTooltip(addButton, { message: translations.ADD_NOTE });
 
@@ -448,7 +456,19 @@
       });
     });
     resizeObserver.observe(rootEl);
+
+    // Safety net: if identity is still unresolved after 8s (e.g. fetch and AbortSignal
+    // both silently failed), unblock the UI as a non-Plug Power user.
+    const identityTimeout = setTimeout(() => {
+      if (!get(userIdentityResolved)) {
+        console.warn("[ServiceLogbook] Identity resolution timed out — defaulting to non-Plug Power");
+        isPlugPowerUser.set(false);
+        userIdentityResolved.set(true);
+      }
+    }, 8000);
+
     return () => {
+      clearTimeout(identityTimeout);
       resizeObserver.unobserve(rootEl);
       unsubscribeLoaded();
       unsubscribeNotes();
