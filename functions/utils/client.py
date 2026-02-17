@@ -90,6 +90,7 @@ class NotesClient:
             author_id=self.user_id,
             author_name=self.user_name,
             performed_on=add.performed_on,
+            activity_end_date=add.activity_end_date,
             tag_numbers=add.tag_numbers,
             version=add.version,
             software_type=add.software_type,
@@ -98,6 +99,8 @@ class NotesClient:
             stack_installs=add.stack_installs,
             stack_tensioning=add.stack_tensioning,
             workorder_id=add.workorder_id,
+            additional_users=add.additional_users,
+            maintenance_interval_months=add.maintenance_interval_months,
         )
 
         result = self.document_client.update_one(
@@ -155,6 +158,7 @@ class NotesClient:
             "category",
             "note_category",
             "performed_on",
+            "activity_end_date",
             "tag_numbers",
             "version",
             "software_type",
@@ -164,6 +168,8 @@ class NotesClient:
             "stack_installs",
             "stack_tensioning",
             "workorder_id",
+            "additional_users",
+            "maintenance_interval_months",
         ]:
             if field in edit.model_fields_set:
                 value = getattr(edit, field)

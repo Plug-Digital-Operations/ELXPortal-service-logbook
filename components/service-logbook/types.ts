@@ -33,6 +33,7 @@ export interface Note {
 
   // Date field for moment of action
   performed_on: number | null;
+  activity_end_date: number | null;
 
   // Calibration & Settings update
   tag_numbers: string[] | null;
@@ -52,6 +53,10 @@ export interface Note {
 
   // Stack Tensioning
   stack_tensioning?: string | null;
+
+  // Maintenance
+  additional_users?: string[] | null;
+  maintenance_interval_months?: number[] | null;
 }
 
 export interface NoteWithHtml extends Note {

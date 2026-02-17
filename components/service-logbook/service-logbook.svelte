@@ -59,6 +59,7 @@
   let searchInputVisible: boolean = false;
   let translations: Record<string, string> = {};
   let usersDict: Record<string, ResourceData.User> | null = null;
+  let plugPowerUserOptions: { value: string; label: string }[] = [];
   let width: number | null = null;
   let now = DateTime.now();
   let dataVariableOptions: {
@@ -413,7 +414,7 @@
     resourceDataClient.query(
       [
         { selector: "MyUser", fields: ["publicId", "support"] },
-        { selector: "UserList", fields: ["name", "publicId"] },
+        { selector: "UserList", fields: ["name", "publicId", "emailAddress"] },
       ],
       async ([myUserResult, userListResult]) => {
         myUser = myUserResult.data;
@@ -422,6 +423,11 @@
             (dict, user) => ({ ...dict, [user.publicId]: user }),
             {},
           );
+          plugPowerUserOptions = userListResult.data
+            .filter((u) =>
+              u.emailAddress?.toLowerCase().includes("@plugpower.com"),
+            )
+            .map((u) => ({ value: u.name, label: u.name }));
         }
 
         // Fetch user email to determine Plug Power status
@@ -517,6 +523,7 @@
       { value: "Stack inspection", label: "Stack visual inspection" },
       { value: "Stack tensioning", label: "Stack tensioning" },
       { value: "Stack installs", label: "Stack installs" },
+      { value: "Maintenance", label: "Maintenance" },
       { value: "Other", label: "Other" },
     ];
 
@@ -704,8 +711,53 @@
             }
           }
 
+          // Handle activity_end_date
+          if (value.activity_end_date) {
+            const activityEndDate = DateTime.fromISO(value.activity_end_date);
+            if (activityEndDate.isValid) {
+              noteData.activity_end_date = activityEndDate.toMillis();
+            }
+          }
+
+          // Handle maintenance_interval_months - convert checkboxes to array of months
+          if (value.maintenance_interval_months) {
+            const intervals: number[] = [];
+            const intervalMap: Record<string, number> = {
+              interval_3_months: 3,
+              interval_6_months: 6,
+              interval_1_year: 12,
+              interval_2_years: 24,
+              interval_5_years: 60,
+              interval_10_years: 120,
+              interval_15_years: 180,
+            };
+            for (const [key, monthValue] of Object.entries(intervalMap)) {
+              if (value.maintenance_interval_months[key] === true) {
+                intervals.push(monthValue);
+              }
+            }
+            if (intervals.length > 0) {
+              noteData.maintenance_interval_months = intervals;
+            }
+          }
+
+          // Handle additional_users - convert List of objects to array of strings
+          if (value.additional_users && Array.isArray(value.additional_users)) {
+            noteData.additional_users = value.additional_users
+              .map((item: any) =>
+                typeof item === "string" ? item : item.user_name,
+              )
+              .filter(Boolean);
+          }
+
           // Merge the rest of the form values
-          const { performed_on, ...restOfValue } = value;
+          const {
+            performed_on,
+            activity_end_date,
+            additional_users,
+            maintenance_interval_months,
+            ...restOfValue
+          } = value;
           Object.assign(noteData, restOfValue);
           notesService.add(noteData);
           step = "exit";
@@ -1000,9 +1052,14 @@
       ? DateTime.fromMillis(note.performed_on)
       : null;
 
+    const activity_end_date = note.activity_end_date
+      ? DateTime.fromMillis(note.activity_end_date)
+      : null;
+
     const initialValue: any = {
       ...note,
       performed_on: performed_on_date ? performed_on_date.toISO() : undefined,
+      activity_end_date: activity_end_date ? activity_end_date.toISO() : undefined,
     };
     // Transform tag_numbers from array of strings to List format for display
     if (initialValue.tag_numbers && Array.isArray(initialValue.tag_numbers)) {
@@ -1012,6 +1069,36 @@
         }),
       );
     }
+
+    // Transform additional_users from array of strings to List format for display
+    if (
+      note.note_category === "Maintenance" &&
+      note.additional_users &&
+      Array.isArray(note.additional_users)
+    ) {
+      initialValue.additional_users = note.additional_users.map(
+        (name: string) => ({ user_name: name }),
+      );
+    }
+
+    // Transform maintenance_interval_months from array of months to checkbox format
+    if (
+      note.note_category === "Maintenance" &&
+      note.maintenance_interval_months &&
+      Array.isArray(note.maintenance_interval_months)
+    ) {
+      const intervalCheckboxes: Record<string, boolean> = {
+        interval_3_months: note.maintenance_interval_months.includes(3),
+        interval_6_months: note.maintenance_interval_months.includes(6),
+        interval_1_year: note.maintenance_interval_months.includes(12),
+        interval_2_years: note.maintenance_interval_months.includes(24),
+        interval_5_years: note.maintenance_interval_months.includes(60),
+        interval_10_years: note.maintenance_interval_months.includes(120),
+        interval_15_years: note.maintenance_interval_months.includes(180),
+      };
+      initialValue.maintenance_interval_months = intervalCheckboxes;
+    }
+
     if (
       note.note_category === "Stack replacements" &&
       note.stack_replacements
@@ -1169,13 +1256,56 @@
     });
 
     if (result && result.value) {
-      const { performed_on, ...rest } = result.value;
+      const {
+        performed_on,
+        activity_end_date,
+        additional_users,
+        maintenance_interval_months,
+        ...rest
+      } = result.value;
       const updatedNote: Partial<Note> = { ...rest };
+
+      // Handle additional_users - convert List of objects to array of strings
+      if (additional_users && Array.isArray(additional_users)) {
+        updatedNote.additional_users = additional_users
+          .map((item: any) =>
+            typeof item === "string" ? item : item.user_name,
+          )
+          .filter(Boolean);
+      }
 
       if (performed_on) {
         const date = DateTime.fromISO(performed_on);
         updatedNote.performed_on = date.toMillis();
       }
+
+      if (activity_end_date) {
+        const date = DateTime.fromISO(activity_end_date);
+        updatedNote.activity_end_date = date.toMillis();
+      }
+
+      // Handle maintenance_interval_months - convert checkboxes to array of months
+      if (maintenance_interval_months) {
+        const intervals: number[] = [];
+        const intervalMap: Record<string, number> = {
+          interval_3_months: 3,
+          interval_6_months: 6,
+          interval_1_year: 12,
+          interval_2_years: 24,
+          interval_5_years: 60,
+          interval_10_years: 120,
+          interval_15_years: 180,
+        };
+        for (const [key, monthValue] of Object.entries(intervalMap)) {
+          if (maintenance_interval_months[key] === true) {
+            intervals.push(monthValue);
+          }
+        }
+        if (intervals.length > 0) {
+          updatedNote.maintenance_interval_months = intervals;
+        }
+      }
+
       // Transform tag_numbers from array of objects to array of strings
       if (updatedNote.tag_numbers && Array.isArray(updatedNote.tag_numbers)) {
         updatedNote.tag_numbers = updatedNote.tag_numbers.map((item: any) =>
@@ -1324,6 +1454,7 @@
       { value: "Stack inspection", label: "Stack visual inspection" },
       { value: "Stack tensioning", label: "Stack tensioning" },
       { value: "Stack installs", label: "Stack installs" },
+      { value: "Maintenance", label: "Maintenance" },
       { value: "Other", label: "Other" },
     ];
 
@@ -1410,8 +1541,20 @@
           allInputs.push({
             key: "current_performed_on",
             type: "String",
-            label: "Current Performed On",
-            defaultValue: performed_on_date.toLocaleString(DateTime.DATE_SHORT),
+            label: "Current Activity Start Date",
+            defaultValue: performed_on_date.toLocaleString(DateTime.DATETIME_SHORT),
+            disabled: true,
+          });
+        }
+
+        // Show activity_end_date if exists
+        if (note.activity_end_date) {
+          const activity_end_date = DateTime.fromMillis(note.activity_end_date);
+          allInputs.push({
+            key: "current_activity_end_date",
+            type: "String",
+            label: "Current Activity End Date",
+            defaultValue: activity_end_date.toLocaleString(DateTime.DATETIME_SHORT),
             disabled: true,
           });
         }
@@ -1728,7 +1871,10 @@
           initialValue: {
             // Preserve common fields
             performed_on: note.performed_on
-              ? DateTime.fromMillis(note.performed_on).toISODate()
+              ? DateTime.fromMillis(note.performed_on).toISO()
+              : null,
+            activity_end_date: note.activity_end_date
+              ? DateTime.fromMillis(note.activity_end_date).toISO()
               : null,
             text: note.text,
             // For non-Plug Power users, always set external_note to true
@@ -1760,6 +1906,8 @@
             stack_installs: null,
             stack_tensioning: null,
             workorder_id: null,
+            additional_users: null,
+            maintenance_interval_months: null,
           };
 
           // Handle performed_on
@@ -1767,6 +1915,14 @@
             const date = DateTime.fromISO(value.performed_on);
             if (date.isValid) {
               updatedNote.performed_on = date.toMillis();
+            }
+          }
+
+          // Handle activity_end_date
+          if (value.activity_end_date) {
+            const date = DateTime.fromISO(value.activity_end_date);
+            if (date.isValid) {
+              updatedNote.activity_end_date = date.toMillis();
             }
           }
 
@@ -1931,6 +2087,41 @@
 
               updatedNote.stack_installs = stackInstalls.join(";") + ";";
               break;
+
+            case "Maintenance":
+              // Handle additional_users - convert List of objects to array of strings
+              if (
+                value.additional_users &&
+                Array.isArray(value.additional_users)
+              ) {
+                updatedNote.additional_users = value.additional_users
+                  .map((item: any) =>
+                    typeof item === "string" ? item : item.user_name,
+                  )
+                  .filter(Boolean);
+              }
+              // Handle maintenance_interval_months - convert checkboxes to array of months
+              if (value.maintenance_interval_months) {
+                const intervals: number[] = [];
+                const intervalMap: Record<string, number> = {
+                  interval_3_months: 3,
+                  interval_6_months: 6,
+                  interval_1_year: 12,
+                  interval_2_years: 24,
+                  interval_5_years: 60,
+                  interval_10_years: 120,
+                  interval_15_years: 180,
+                };
+                for (const [key, monthValue] of Object.entries(intervalMap)) {
+                  if (value.maintenance_interval_months[key] === true) {
+                    intervals.push(monthValue);
+                  }
+                }
+                if (intervals.length > 0) {
+                  updatedNote.maintenance_interval_months = intervals;
+                }
+              }
+              break;
           }
 
           // Save the recategorized note
@@ -2048,7 +2239,7 @@
     </div>
   `;
 
-    // FIX: Universal check and display for 'Performed On'
+    // FIX: Universal check and display for 'Activity Start Date' and 'Activity End Date'
     let performedOnHtml = "";
     if (note.performed_on) {
       const performedDate = DateTime.fromMillis(
@@ -2057,12 +2248,35 @@
         year: "numeric",
         month: "long",
         day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
       });
       performedOnHtml = `
           <div style="margin-bottom: 16px; padding: 8px; border-left: 3px solid color-mix(in srgb, transparent, currentcolor 20%);">
             <div style="margin-bottom: 8px;">
-              <strong style="color: color-mix(in srgb, transparent, currentcolor 40%);">Performed On:</strong>
+              <strong style="color: color-mix(in srgb, transparent, currentcolor 40%);">Activity Start Date:</strong>
               <span>${performedDate}</span>
+            </div>
+          </div>
+        `;
+    }
+
+    let activityEndDateHtml = "";
+    if (note.activity_end_date) {
+      const endDate = DateTime.fromMillis(
+        note.activity_end_date,
+      ).toLocaleString({
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+      activityEndDateHtml = `
+          <div style="margin-bottom: 16px; padding: 8px; border-left: 3px solid color-mix(in srgb, transparent, currentcolor 20%);">
+            <div style="margin-bottom: 8px;">
+              <strong style="color: color-mix(in srgb, transparent, currentcolor 40%);">Activity End Date:</strong>
+              <span>${endDate}</span>
             </div>
           </div>
         `;
@@ -2355,6 +2569,7 @@
         ${externalNoteBadge}
         ${categorySection}
         ${performedOnHtml}
+        ${activityEndDateHtml}
         ${categoryFields}
         <div style="margin-top: 16px;">
           ${sanitizedHtml}
@@ -2425,8 +2640,14 @@
     inputs.push({
       key: "performed_on",
       type: "DateTime",
-      label: "Performed on",
+      label: "Activity Start Date",
       required: true,
+    });
+    inputs.push({
+      key: "activity_end_date",
+      type: "DateTime",
+      label: "Activity End Date",
+      required: false,
     });
     // Add category-specific fields
     switch (category) {
@@ -2681,6 +2902,69 @@
             placeholder: "Enter new software version (e.g., v2.1.0)",
           },
         );
+        break;
+      case "Maintenance":
+        inputs.push({
+          key: "additional_users",
+          type: "List" as const,
+          label: "Additional engineers",
+          required: false,
+          itemType: {
+            key: "user_name",
+            type: "Selection" as const,
+            label: "Engineer",
+            options: plugPowerUserOptions,
+          },
+        });
+        inputs.push({
+          key: "maintenance_interval_months",
+          type: "Group" as const,
+          label: "Maintenance Interval",
+          children: [
+            {
+              key: "interval_3_months",
+              type: "Checkbox" as const,
+              label: "3 months",
+              defaultValue: false,
+            },
+            {
+              key: "interval_6_months",
+              type: "Checkbox" as const,
+              label: "6 months",
+              defaultValue: false,
+            },
+            {
+              key: "interval_1_year",
+              type: "Checkbox" as const,
+              label: "1 Year",
+              defaultValue: false,
+            },
+            {
+              key: "interval_2_years",
+              type: "Checkbox" as const,
+              label: "2 Years",
+              defaultValue: false,
+            },
+            {
+              key: "interval_5_years",
+              type: "Checkbox" as const,
+              label: "5 Years",
+              defaultValue: false,
+            },
+            {
+              key: "interval_10_years",
+              type: "Checkbox" as const,
+              label: "10 Years",
+              defaultValue: false,
+            },
+            {
+              key: "interval_15_years",
+              type: "Checkbox" as const,
+              label: "15 Years",
+              defaultValue: false,
+            },
+          ],
+        });
         break;
       default:
         // No unique fields for other categories
