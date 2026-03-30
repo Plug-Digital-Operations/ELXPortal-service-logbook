@@ -8,11 +8,13 @@ export class NotesService {
 
   constructor(private client: BackendComponentClient) {}
 
-  add(note: Partial<Note>) {
+  add(note: Partial<Note>): Promise<Note | null> {
     return this.client.call("notes.add", note).then((result) => {
       if (result.data.success) {
         this.notes.update((notes) => [result.data.data, ...notes]);
+        return result.data.data as Note;
       }
+      return null;
     });
   }
 

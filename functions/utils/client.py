@@ -102,6 +102,7 @@ class NotesClient:
             note_sub_category=add.note_sub_category,
             additional_users=add.additional_users,
             maintenance_interval_months=add.maintenance_interval_months,
+            activity_files=add.activity_files,
         )
 
         result = self.document_client.update_one(
@@ -172,6 +173,7 @@ class NotesClient:
             "note_sub_category",
             "additional_users",
             "maintenance_interval_months",
+            "activity_files",
         ]:
             if field in edit.model_fields_set:
                 value = getattr(edit, field)

@@ -57,6 +57,9 @@ class Note(BaseModel):
     additional_users: list[str] | None = Field(default=None)
     maintenance_interval_months: list[int] | None = Field(default=None)
 
+    # Activity files (stored in Object Storage)
+    activity_files: list[str] | None = Field(default=None)
+
     @field_validator("id", mode="before")
     @classmethod
     def convert_string_id_to_objectid(cls, v):
@@ -121,6 +124,9 @@ class NoteEdit(BaseModel):
     additional_users: list[str] | None = Field(default=None)
     maintenance_interval_months: list[int] | None = Field(default=None)
 
+    # Activity files (stored in Object Storage)
+    activity_files: list[str] | None = Field(default=None)
+
 
 class NoteAdd(BaseModel):
     text: str
@@ -154,6 +160,9 @@ class NoteAdd(BaseModel):
     # Maintenance
     additional_users: list[str] | None = Field(default=None)
     maintenance_interval_months: list[int] | None = Field(default=None)
+
+    # Activity files (stored in Object Storage)
+    activity_files: list[str] | None = Field(default=None)
 
 
 class NoteRemove(BaseModel):

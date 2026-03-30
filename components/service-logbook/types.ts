@@ -60,6 +60,9 @@ export interface Note {
   // Maintenance
   additional_users?: string[] | null;
   maintenance_interval_months?: number[] | null;
+
+  // Activity files (stored in Object Storage)
+  activity_files?: string[] | null;
 }
 
 export interface NoteWithHtml extends Note {

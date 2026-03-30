@@ -56,6 +56,7 @@
       }),
   );
   let notesService: NotesService;
+  let objectStorageClient: ReturnType<typeof context.createObjectStorageClient> | null = null;
   let searchInput: HTMLInputElement | null = null;
   let searchInputVisible: boolean = false;
   let translations: Record<string, string> = {};
@@ -376,6 +377,7 @@
     mapAppConfigToServiceLogbookCategoryMap =
       mapAppConfigToServiceLogbookCategoryMapFactory(context);
     notesService = new NotesService(backendComponentClient);
+    objectStorageClient = context.createObjectStorageClient();
 
     // Subscribe to the service stores and sync to local stores
     const unsubscribeLoaded = notesService.loaded.subscribe((value) =>
@@ -769,10 +771,31 @@
             activity_end_date,
             additional_users,
             maintenance_interval_months,
+            activity_files: activityFilesRaw,
             ...restOfValue
           } = value;
           Object.assign(noteData, restOfValue);
-          notesService.add(noteData);
+
+          const createdNote = await notesService.add(noteData);
+
+          if (createdNote?._id && activityFilesRaw?.length) {
+            // List items are { file: FileObject } because itemType.key = "file"
+            const files: File[] = activityFilesRaw
+              .map((item: any) => (item instanceof File ? item : item?.file))
+              .filter(Boolean);
+            const uploadedNames = await _uploadActivityFiles(
+              files,
+              createdNote._id,
+            );
+            if (uploadedNames.length > 0) {
+              // NoteEdit requires `text` — pass it from the created note
+              await notesService.edit(createdNote._id, {
+                text: createdNote.text,
+                activity_files: uploadedNames,
+              });
+            }
+          }
+
           step = "exit";
         } else {
           step = "category";
@@ -872,6 +895,8 @@
         createTooltip(moreButton as HTMLButtonElement, {
           message: translations.MORE_OPTIONS,
         });
+
+        _setupFileButtonListeners(shadowRoot);
       },
       pagination: {
         pageCount: previewNotes.length,
@@ -1004,6 +1029,7 @@
     });
     if (confirmed) {
       notesService.remove(note._id);
+      _deleteActivityFilesForNote(note._id); // fire-and-forget
     }
   }
 
@@ -1262,7 +1288,7 @@
 
     const result = await context.openFormDialog({
       title: `${translations.EDIT} ${displayCategory}`,
-      inputs: _getNoteInputs(note.note_category || "Other", true),
+      inputs: _getNoteInputs(note.note_category || "Other", true, note.activity_files ?? []),
       initialValue,
       submitButtonText: translations.CONFIRM,
       discardChangesPrompt: true,
@@ -1274,9 +1300,15 @@
         activity_end_date,
         additional_users,
         maintenance_interval_months,
+        activity_files: newActivityFilesRaw,
         ...rest
       } = result.value;
-      const updatedNote: Partial<Note> = { ...rest };
+
+      // Filter out keep_file_N checkbox keys from the note payload
+      const filteredRest = Object.fromEntries(
+        Object.entries(rest).filter(([key]) => !key.startsWith("keep_file_")),
+      );
+      const updatedNote: Partial<Note> = { ...filteredRest };
 
       // Handle additional_users - convert List of objects to array of strings
       if (additional_users && Array.isArray(additional_users)) {
@@ -1454,6 +1486,47 @@
 
         updatedNote.stack_installs = stackInstalls.join(";") + ";";
       }
+
+      // Determine which existing files to keep vs remove based on checkboxes
+      const existingFiles: string[] = note.activity_files ?? [];
+      const filesToRemove: string[] = [];
+      const filesToKeep: string[] = [];
+      existingFiles.forEach((filename, index) => {
+        if (result.value[`keep_file_${index}`] === false) {
+          filesToRemove.push(filename);
+        } else {
+          filesToKeep.push(filename);
+        }
+      });
+
+      // Delete removed files from Object Storage
+      if (filesToRemove.length > 0 && objectStorageClient) {
+        try {
+          const list = await objectStorageClient.getList();
+          for (const filename of filesToRemove) {
+            const entry = list.entries.find(
+              (e: any) => e.tags?.note_id === note._id && e.tags?.name === filename,
+            );
+            if (entry) {
+              await objectStorageClient.delete(entry);
+            }
+          }
+        } catch (e) {
+          console.error("Failed to delete removed files:", e);
+        }
+      }
+
+      // Upload new files and merge with kept files
+      const newFiles: File[] = (newActivityFilesRaw ?? [])
+        .map((item: any) => (item instanceof File ? item : item?.file))
+        .filter(Boolean);
+      let allFiles = [...filesToKeep];
+      if (newFiles.length > 0) {
+        const uploaded = await _uploadActivityFiles(newFiles, note._id);
+        allFiles = [...filesToKeep, ...uploaded];
+      }
+      updatedNote.activity_files = allFiles.length > 0 ? allFiles : null;
+
       await notesService.edit(note._id, updatedNote);
     }
   }
@@ -2568,6 +2641,33 @@
         break;
     }
 
+    // Activity files section
+    let activityFilesHtml = "";
+    if (note.activity_files?.length) {
+      const fileButtons = note.activity_files
+        .map(
+          (name) =>
+            `<button class="file-button" data-note-id="${note._id}" data-filename="${name}"
+              style="display:inline-flex;align-items:center;gap:6px;margin:4px;padding:6px 10px;
+                     border:1px solid color-mix(in srgb,transparent,currentcolor 20%);border-radius:4px;
+                     cursor:pointer;background:color-mix(in srgb,transparent,currentcolor 4%);
+                     font-size:0.85em;color:inherit;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6zm4 18H6V4h7v5h5v11z"/>
+              </svg>
+              ${name}
+            </button>`,
+        )
+        .join("");
+      activityFilesHtml = `
+        <div style="margin-bottom:16px;padding:8px;border-left:3px solid color-mix(in srgb,transparent,currentcolor 20%);">
+          <strong style="color:color-mix(in srgb,transparent,currentcolor 40%);display:block;margin-bottom:6px;">
+            Activity Files:
+          </strong>
+          <div>${fileButtons}</div>
+        </div>`;
+    }
+
     // External note badge
     const externalNoteBadge =
       note.external_note && get(isPlugPowerUser)
@@ -2596,6 +2696,7 @@
         ${performedOnHtml}
         ${activityEndDateHtml}
         ${categoryFields}
+        ${activityFilesHtml}
         <div style="margin-top: 16px;">
           ${sanitizedHtml}
         </div>
@@ -2656,11 +2757,12 @@
       );
       if (contentMatch) {
         cardContent.innerHTML = contentMatch[1];
+        _setupFileButtonListeners(root);
       }
     }
   }
 
-  function _getNoteInputs(category: string, isEdit = false): ComponentInput[] {
+  function _getNoteInputs(category: string, isEdit = false, existingFiles: string[] = []): ComponentInput[] {
     const inputs: ComponentInput[] = [];
     inputs.push({
       key: "performed_on",
@@ -3036,6 +3138,32 @@
       });
     }
 
+    // When editing, show each existing file as a checkbox (checked = keep, unchecked = remove)
+    if (isEdit && existingFiles.length > 0) {
+      existingFiles.forEach((filename, index) => {
+        inputs.push({
+          key: `keep_file_${index}`,
+          type: "Checkbox" as const,
+          label: filename,
+          defaultValue: true,
+          description: "Uncheck to remove this file",
+        });
+      });
+    }
+
+    // Activity files — available to all categories
+    inputs.push({
+      key: "activity_files",
+      type: "List" as const,
+      label: isEdit ? "Add New Files" : "Activity Files",
+      required: false,
+      itemType: {
+        key: "file",
+        type: "File" as const,
+        label: "File",
+      },
+    });
+
     return inputs;
   }
 
@@ -3104,6 +3232,87 @@
       return category.name;
     }
     return translations.UNCATEGORIZED || "Uncategorized";
+  }
+
+  // --- Object Storage helpers ---
+
+  function _isViewableFile(filename: string): boolean {
+    const ext = filename.split(".").pop()?.toLowerCase() ?? "";
+    return new Set([
+      "jpg", "jpeg", "png", "gif", "webp", "svg", "bmp",
+      "pdf",
+      "txt", "md", "log", "csv",
+    ]).has(ext);
+  }
+
+  async function _uploadActivityFiles(
+    files: File[],
+    noteId: string,
+  ): Promise<string[]> {
+    if (!objectStorageClient || !files.length) return [];
+    const names: string[] = [];
+    for (const file of files) {
+      // File extends Blob — pass directly
+      await objectStorageClient.store(file, {
+        tags: { name: file.name, note_id: noteId },
+      });
+      names.push(file.name);
+    }
+    return names;
+  }
+
+  function _setupFileButtonListeners(root: ShadowRoot): void {
+    root.querySelectorAll<HTMLButtonElement>(".file-button").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const noteId = btn.dataset.noteId;
+        const filename = btn.dataset.filename;
+        if (!noteId || !filename || !objectStorageClient) return;
+        try {
+          const list = await objectStorageClient.getList();
+          const entry = list.entries.find(
+            (e: any) => e.tags?.note_id === noteId && e.tags?.name === filename,
+          );
+          if (!entry) {
+            context.openAlertDialog({
+              title: "File not found",
+              message: `"${filename}" could not be located in storage.`,
+            });
+            return;
+          }
+          const blob = await objectStorageClient.getBlob(entry);
+          if (_isViewableFile(filename)) {
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.target = "_blank";
+            a.rel = "noopener";
+            a.click();
+            setTimeout(() => URL.revokeObjectURL(url), 10000);
+          } else {
+            context.saveAsFile(blob, filename);
+          }
+        } catch {
+          context.openAlertDialog({
+            title: "Error",
+            message: "Failed to retrieve file.",
+          });
+        }
+      });
+    });
+  }
+
+  async function _deleteActivityFilesForNote(noteId: string): Promise<void> {
+    if (!objectStorageClient) return;
+    try {
+      const list = await objectStorageClient.getList();
+      for (const entry of list.entries.filter(
+        (e: any) => e.tags?.note_id === noteId,
+      )) {
+        await objectStorageClient.delete(entry);
+      }
+    } catch (e) {
+      console.error("Failed to delete activity files:", e);
+    }
   }
 
   async function handleDownloadJsonButtonClick(): Promise<void> {
